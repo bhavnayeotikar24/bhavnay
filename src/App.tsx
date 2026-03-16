@@ -402,6 +402,7 @@ function SidebarItem({ icon, label, active, onClick }: { icon: React.ReactNode; 
 }
 
 function LoginPage() {
+  const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -412,9 +413,21 @@ function LoginPage() {
     setLoading(true);
     setError('');
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
     } catch (err: any) {
-      setError('Invalid email or password. Please try again.');
+      if (err.code === 'auth/email-already-in-use') {
+        setError('This email is already registered. Please sign in instead.');
+      } else if (err.code === 'auth/invalid-credential') {
+        setError('Invalid email or password. Please try again.');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Password should be at least 6 characters.');
+      } else {
+        setError(err.message || 'Authentication failed. Please try again.');
+      }
       console.error(err);
     } finally {
       setLoading(false);
@@ -429,10 +442,13 @@ function LoginPage() {
       await signInWithPopup(auth, provider);
     } catch (err: any) {
       if (err.code === 'auth/popup-closed-by-user') {
-        // User closed the popup, no need to show a scary error
         return;
       }
-      setError('Google sign-in failed. Please try again.');
+      if (err.code === 'auth/unauthorized-domain') {
+        setError('This domain is not authorized in Firebase. Please add this URL to Authorized Domains in Firebase Console.');
+      } else {
+        setError('Google sign-in failed: ' + err.message);
+      }
       console.error(err);
     } finally {
       setLoading(false);
@@ -456,6 +472,27 @@ function LoginPage() {
           </div>
 
           <div className="space-y-6">
+            <div className="flex bg-gray-100 p-1 rounded-2xl">
+              <button 
+                onClick={() => setIsSignUp(false)}
+                className={cn(
+                  "flex-1 py-2.5 text-xs font-bold rounded-xl transition-all",
+                  !isSignUp ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                SIGN IN
+              </button>
+              <button 
+                onClick={() => setIsSignUp(true)}
+                className={cn(
+                  "flex-1 py-2.5 text-xs font-bold rounded-xl transition-all",
+                  isSignUp ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                )}
+              >
+                SIGN UP
+              </button>
+            </div>
+
             <Button 
               onClick={handleGoogleLogin}
               variant="secondary"
@@ -480,7 +517,7 @@ function LoginPage() {
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
                 />
               </svg>
-              Sign in with Google
+              {isSignUp ? 'Sign up with Google' : 'Sign in with Google'}
             </Button>
 
             <div className="relative">
@@ -488,7 +525,7 @@ function LoginPage() {
                 <div className="w-full border-t border-gray-100"></div>
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-4 text-gray-400 font-bold tracking-widest">Or continue with</span>
+                <span className="bg-white px-4 text-gray-400 font-bold tracking-widest">Or use email</span>
               </div>
             </div>
 
@@ -519,13 +556,36 @@ function LoginPage() {
                 </div>
               )}
 
-              <Button 
-                type="submit" 
-                className="w-full py-4 text-base font-bold"
-                isLoading={loading}
-              >
-                Sign In
-              </Button>
+              <div className="flex items-center justify-between">
+                <Button 
+                  type="submit" 
+                  className="flex-1 py-4 text-base font-bold"
+                  isLoading={loading}
+                >
+                  {isSignUp ? 'Create Account' : 'Sign In'}
+                </Button>
+              </div>
+
+              {!isSignUp && (
+                <button 
+                  type="button"
+                  onClick={async () => {
+                    if (!email) {
+                      setError('Please enter your email address first.');
+                      return;
+                    }
+                    try {
+                      await sendPasswordResetEmail(auth, email);
+                      alert('Password reset email sent! Please check your inbox.');
+                    } catch (err: any) {
+                      setError('Error sending reset email: ' + err.message);
+                    }
+                  }}
+                  className="w-full text-center text-xs font-bold text-indigo-600 hover:text-indigo-700 transition-colors mt-4"
+                >
+                  FORGOT PASSWORD?
+                </button>
+              )}
             </form>
           </div>
 
