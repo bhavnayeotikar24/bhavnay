@@ -227,8 +227,29 @@ export default function App() {
               setAdminProfile(profile);
             }
           } else {
-            // Check if it's the super admin email
-            if (u.email === 'bhavnayeotikar@gmail.com') {
+            // Check if there's a record with this email but different UID (placeholder)
+            const q = query(collection(db, 'admins'), where('email', '==', u.email));
+            const querySnap = await getDocs(q);
+            
+            if (!querySnap.empty) {
+              const oldDoc = querySnap.docs[0];
+              const oldData = oldDoc.data() as AdminProfile;
+              
+              // Claim the record: create new doc with real UID, delete old one if ID is different
+              const newProfile: AdminProfile = {
+                ...oldData,
+                uid: u.uid,
+                displayName: u.displayName || oldData.displayName,
+                isActive: true // Ensure they are active if they just logged in/signed up
+              };
+              
+              await setDoc(doc(db, 'admins', u.uid), newProfile);
+              if (oldDoc.id !== u.uid) {
+                await deleteDoc(doc(db, 'admins', oldDoc.id));
+              }
+              setAdminProfile(newProfile);
+            } else if (u.email === 'bhavnayeotikar@gmail.com') {
+              // Bootstrap super admin
               const newProfile: AdminProfile = {
                 uid: u.uid,
                 adminId: 'SUPER_ADMIN',
@@ -472,6 +493,13 @@ function LoginPage() {
           </div>
 
           <div className="space-y-6">
+            <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl mb-4">
+              <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Notice for New Admins</p>
+              <p className="text-xs text-indigo-800 leading-relaxed">
+                If you have been added as an admin but don't have a password yet, please use the <strong>SIGN UP</strong> tab below to create your account.
+              </p>
+            </div>
+
             <div className="flex bg-gray-100 p-1 rounded-2xl">
               <button 
                 onClick={() => setIsSignUp(false)}

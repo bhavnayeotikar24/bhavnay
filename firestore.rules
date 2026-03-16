@@ -85,7 +85,7 @@ service cloud.firestore {
     // ===============================================================
 
     match /admins/{uid} {
-      allow read: if isOwner(uid) || isSuperAdmin();
+      allow read: if isOwner(uid) || isSuperAdmin() || (isAuthenticated() && resource.data.email == request.auth.token.email);
       allow create: if isSuperAdmin() && isValidAdmin(request.resource.data);
       allow update: if isSuperAdmin() && isValidAdmin(request.resource.data);
       allow delete: if isSuperAdmin();
