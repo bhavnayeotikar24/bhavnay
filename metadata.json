@@ -1,0 +1,5 @@
+{
+  "name": "BIOCOM LABS LIMS Portal",
+  "description": "Laboratory Information Management System for BIOCOM LABS with secure admin portal, sample data entry, and PDF report generation.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,106 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: admins
+// Document ID: {uid}
+// Fields:
+//   - uid: string (required) - Firebase Auth UID
+//   - adminId: string (required) - Unique Admin Identifier
+//   - email: string (required) - Admin email address
+//   - role: string (required) - 'super-admin' or 'admin'
+//   - displayName: string (optional) - Full name
+//   - isActive: boolean (required) - Account status
+//   - createdAt: timestamp (optional)
+//
+// Collection: reports
+// Document ID: {reportId}
+// Fields:
+//   - reportId: string (required)
+//   - clientInfo: map (required) - Client details
+//   - sampleInfo: map (required) - Sample details
+//   - testResults: list (required) - Array of test result maps
+//   - analysisInfo: map (required) - Analysis metadata
+//   - createdAt: timestamp (required)
+//   - createdBy: string (required) - UID of creator
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == "bhavnayeotikar@gmail.com" ||
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.isActive == true &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'super-admin'])
+      );
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == "bhavnayeotikar@gmail.com" ||
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.isActive == true &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'super-admin')
+      );
+    }
+
+    function isValidAdmin(data) {
+      return data.keys().hasAll(['uid', 'adminId', 'email', 'role', 'isActive']) &&
+             data.uid is string &&
+             data.adminId is string && data.adminId.size() > 0 && data.adminId.size() < 50 &&
+             data.email is string && data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
+             data.role in ['super-admin', 'admin'] &&
+             data.isActive is bool;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['reportId', 'clientInfo', 'sampleInfo', 'testResults', 'analysisInfo', 'createdAt', 'createdBy']) &&
+             data.reportId is string &&
+             data.clientInfo is map &&
+             data.sampleInfo is map &&
+             data.testResults is list &&
+             data.analysisInfo is map &&
+             data.createdAt is timestamp &&
+             data.createdBy is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /admins/{uid} {
+      allow read: if isOwner(uid) || isSuperAdmin();
+      allow create: if isSuperAdmin() && isValidAdmin(request.resource.data);
+      allow update: if isSuperAdmin() && isValidAdmin(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /reports/{reportId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && isValidReport(request.resource.data);
+      allow update: if isAdmin() && isValidReport(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

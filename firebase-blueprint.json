@@ -1,0 +1,88 @@
+{
+  "entities": {
+    "Admin": {
+      "title": "Admin",
+      "description": "System administrator user",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "adminId": { "type": "string", "description": "Unique Admin Identifier" },
+        "email": { "type": "string", "description": "Admin email address" },
+        "role": { "type": "string", "enum": ["super-admin", "admin"], "description": "User role" },
+        "displayName": { "type": "string", "description": "Full name of the admin" },
+        "isActive": { "type": "boolean", "description": "Whether the account is active" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "adminId", "email", "role", "isActive"]
+    },
+    "AnalysisReport": {
+      "title": "Analysis Report",
+      "description": "Laboratory analysis report record",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string" },
+        "clientInfo": {
+          "type": "object",
+          "properties": {
+            "clientName": { "type": "string" },
+            "salutation": { "type": "string" },
+            "fullName": { "type": "string" },
+            "phoneNumber": { "type": "string" },
+            "address": { "type": "string" },
+            "city": { "type": "string" },
+            "state": { "type": "string" },
+            "zipCode": { "type": "string" },
+            "country": { "type": "string" }
+          }
+        },
+        "sampleInfo": {
+          "type": "object",
+          "properties": {
+            "projectName": { "type": "string" },
+            "projectNumber": { "type": "string" },
+            "sampleId": { "type": "string" },
+            "sampleSubtype": { "type": "string" },
+            "samplingDate": { "type": "string" },
+            "samplingTime": { "type": "string" },
+            "samplePreparationDate": { "type": "string" },
+            "samplePreparationTime": { "type": "string" }
+          }
+        },
+        "testResults": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "test": { "type": "string" },
+              "method": { "type": "string" },
+              "result": { "type": "string" },
+              "unit": { "type": "string" },
+              "rl": { "type": "string" }
+            }
+          }
+        },
+        "analysisInfo": {
+          "type": "object",
+          "properties": {
+            "analysisDate": { "type": "string" },
+            "analysisTime": { "type": "string" },
+            "analysisBy": { "type": "string" },
+            "qcReportingBy": { "type": "string" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/admins/{uid}": {
+      "schema": "Admin",
+      "description": "Collection of system administrators"
+    },
+    "/reports/{reportId}": {
+      "schema": "AnalysisReport",
+      "description": "Collection of analysis reports"
+    }
+  }
+}
