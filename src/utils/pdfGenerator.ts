@@ -138,12 +138,33 @@ export const generatePDF = (report: AnalysisReport) => {
   });
 
   // Signature Section
-  const finalY = (doc as any).lastAutoTable.finalY + 20;
-  doc.line(margin, finalY, margin + 50, finalY);
-  doc.setFontSize(9);
-  doc.text('Reviewed and Authorized by', margin, finalY + 5);
+  const signatureSectionY = (doc as any).lastAutoTable.finalY + 15;
+  
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text('Reviewed and Authorized by:', margin, signatureSectionY);
+
+  if (report.signatureUrl) {
+    try {
+      // Add signature image below the header text
+      doc.addImage(report.signatureUrl, 'PNG', margin, signatureSectionY + 2, 40, 15);
+    } catch (e) {
+      console.error('Error adding signature image:', e);
+    }
+  }
+
+  // Name and Title below signature
+  const nameY = signatureSectionY + 22;
   doc.setFont('helvetica', 'bold');
-  doc.text('Marubetsy Alcina', margin, finalY + 10);
+  doc.setFontSize(11);
+  // Using analysisBy as the name of the person who authorized
+  doc.text(report.analysisInfo.analysisBy, margin, nameY);
+
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(10);
+  doc.setTextColor(50, 50, 50);
+  doc.text('Quality Manager', margin, nameY + 5);
+  doc.setTextColor(0, 0, 0);
 
   // Footer Section
   const footerText = "The data and information on this, and other accompanying documents, represents only the sample(s) analyzed. This report is incomplete unless all pages indicated in the footnote are present and an authorized signature is included. The services were provided under and subject to BIOCOM’s standard terms and conditions which can be located and reviewed at https://biocomlabs.com/terms-and-conditions. Permission from the laboratory and/or the relevant entity is required for full reproduction of this report. Results to be retained for 3 years.\nDefinitions: MPN/mL Most Probable Number per 1 Milliliters / EST: Estimated result / MPN/100mL Most Probable Number per 100 Milliliters / RL: Reporting Limit";

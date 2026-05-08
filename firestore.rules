@@ -47,7 +47,7 @@ service cloud.firestore {
         request.auth.token.email == "bhavnayeotikar@gmail.com" ||
         (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) && 
          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.isActive == true &&
-         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'super-admin'])
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'super-admin', 'analyst', 'reviewer'])
       );
     }
 
@@ -61,11 +61,11 @@ service cloud.firestore {
     }
 
     function isValidAdmin(data) {
-      return data.keys().hasAll(['uid', 'adminId', 'email', 'role', 'isActive']) &&
-             data.uid is string &&
+      return data.keys().hasAll(['adminId', 'email', 'role', 'isActive']) &&
+             (data.uid == null || data.uid is string) &&
              data.adminId is string && data.adminId.size() > 0 && data.adminId.size() < 50 &&
              data.email is string && data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
-             data.role in ['super-admin', 'admin'] &&
+             data.role in ['super-admin', 'admin', 'analyst', 'reviewer'] &&
              data.isActive is bool;
     }
 
@@ -80,15 +80,45 @@ service cloud.firestore {
              data.createdBy is string;
     }
 
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['userId', 'userEmail', 'timestamp', 'action', 'module']) &&
+             data.userId == request.auth.uid &&
+             data.userEmail == request.auth.token.email;
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
 
-    match /admins/{uid} {
-      allow read: if isOwner(uid) || isSuperAdmin() || (isAuthenticated() && resource.data.email == request.auth.token.email);
-      allow create: if isSuperAdmin() && isValidAdmin(request.resource.data);
-      allow update: if isSuperAdmin() && isValidAdmin(request.resource.data);
-      allow delete: if isSuperAdmin();
+    match /admins/{docId} {
+      allow read: if isAuthenticated() && (
+        isOwner(docId) || 
+        isAdmin() || 
+        (resource != null && resource.data.email == request.auth.token.email)
+      );
+      allow create: if isAdmin() || (
+        isAuthenticated() && 
+        isValidAdmin(request.resource.data) &&
+        request.resource.data.email == request.auth.token.email &&
+        request.resource.data.uid == request.auth.uid
+      );
+      allow update: if isAuthenticated() && (
+        (isAdmin() && isValidAdmin(request.resource.data)) ||
+        (
+          resource != null && 
+          resource.data.email == request.auth.token.email && 
+          request.resource.data.email == resource.data.email &&
+          request.resource.data.uid == request.auth.uid &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.adminId == resource.data.adminId &&
+          request.resource.data.isActive == resource.data.isActive
+        )
+      );
+      allow delete: if isAdmin() || (
+        isAuthenticated() &&
+        resource != null &&
+        resource.data.email == request.auth.token.email
+      );
     }
 
     match /reports/{reportId} {
@@ -96,6 +126,12 @@ service cloud.firestore {
       allow create: if isAdmin() && isValidReport(request.resource.data);
       allow update: if isAdmin() && isValidReport(request.resource.data);
       allow delete: if isAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && isValidAuditLog(request.resource.data);
+      allow update, delete: if false;
     }
 
     // Default deny

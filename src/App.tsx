@@ -22,7 +22,8 @@ import {
   orderBy, 
   onSnapshot,
   deleteDoc,
-  serverTimestamp
+  serverTimestamp,
+  limit
 } from 'firebase/firestore';
 import { 
   LayoutDashboard, 
@@ -42,7 +43,12 @@ import {
   AlertCircle,
   Loader2,
   Edit,
-  Filter
+  Filter,
+  History,
+  ClipboardList,
+  FileSpreadsheet,
+  Upload,
+  Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -56,10 +62,13 @@ import {
   AnalysisInfo,
   OperationType,
   UserRole,
-  ReportType
+  ReportType,
+  AuditLog
 } from './types';
 import { handleFirestoreError } from './utils/errorHandlers';
 import { generatePDF } from './utils/pdfGenerator';
+import { exportToExcel } from './utils/excelExporter';
+import { exportLogsToCSV, exportLogsToPDF } from './utils/logExporter';
 import ErrorBoundary from './components/ErrorBoundary';
 
 // Utility for tailwind classes
@@ -200,12 +209,39 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [adminProfile, setAdminProfile] = useState<AdminProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'create' | 'records' | 'admins'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'create' | 'records' | 'admins' | 'logs'>('dashboard');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 5000);
+  };
+
+  const logActivity = async (params: {
+    action: string;
+    module: string;
+    details?: string;
+    previousValues?: any;
+    updatedValues?: any;
+    signatureDetails?: AuditLog['signatureDetails'];
+  }) => {
+    if (!user || !adminProfile) return;
+
+    try {
+      const logRef = doc(collection(db, 'auditLogs'));
+      const logData: AuditLog = {
+        id: logRef.id,
+        userId: user.uid,
+        userEmail: adminProfile.email,
+        userDisplayName: adminProfile.displayName,
+        userRole: adminProfile.role,
+        timestamp: serverTimestamp(),
+        ...params
+      };
+      await setDoc(logRef, logData);
+    } catch (error) {
+      console.error('Failed to log activity:', error);
+    }
   };
 
   useEffect(() => {
@@ -227,27 +263,33 @@ export default function App() {
               setAdminProfile(profile);
             }
           } else {
-            // Check if there's a record with this email but different UID (placeholder)
-            const q = query(collection(db, 'admins'), where('email', '==', u.email));
-            const querySnap = await getDocs(q);
+            // Check if there's a record with this email (unclaimed)
+            // We use the email as the document ID for unclaimed records
+            const unclaimedDocRef = doc(db, 'admins', u.email!);
+            const unclaimedSnap = await getDoc(unclaimedDocRef);
             
-            if (!querySnap.empty) {
-              const oldDoc = querySnap.docs[0];
-              const oldData = oldDoc.data() as AdminProfile;
+            if (unclaimedSnap.exists()) {
+              const unclaimedData = unclaimedSnap.data() as AdminProfile;
               
-              // Claim the record: create new doc with real UID, delete old one if ID is different
+              // Claim the record: create new doc with real UID
               const newProfile: AdminProfile = {
-                ...oldData,
+                ...unclaimedData,
                 uid: u.uid,
-                displayName: u.displayName || oldData.displayName,
-                isActive: true // Ensure they are active if they just logged in/signed up
+                displayName: u.displayName || unclaimedData.displayName,
+                isActive: true,
+                claimed: true
               };
               
+              // 1. Create the new document with UID as ID
               await setDoc(doc(db, 'admins', u.uid), newProfile);
-              if (oldDoc.id !== u.uid) {
-                await deleteDoc(doc(db, 'admins', oldDoc.id));
+              
+              // 2. Delete the old unclaimed document (ID was email)
+              if (u.email !== u.uid) {
+                await deleteDoc(unclaimedDocRef);
               }
+              
               setAdminProfile(newProfile);
+              showToast('Account claimed successfully! Welcome to the team.');
             } else if (u.email === 'bhavnayeotikar@gmail.com') {
               // Bootstrap super admin
               const newProfile: AdminProfile = {
@@ -267,10 +309,33 @@ export default function App() {
               alert('Access denied. You are not an authorized admin.');
             }
           }
+
+          // Log Login
+          const latestProfile = adminProfile || (await getDoc(doc(db, 'admins', u.uid))).data() as AdminProfile;
+          if (latestProfile) {
+            const logRef = doc(collection(db, 'auditLogs'));
+            await setDoc(logRef, {
+              id: logRef.id,
+              userId: u.uid,
+              userEmail: latestProfile.email,
+              userDisplayName: latestProfile.displayName,
+              userRole: latestProfile.role,
+              timestamp: serverTimestamp(),
+              action: 'LOGIN',
+              module: 'Authentication',
+              details: `User logged in: ${latestProfile.displayName}`
+            });
+          }
         } catch (error) {
           console.error('Error fetching admin profile:', error);
         }
       } else {
+        // Log Logout if was logged in
+        if (user && adminProfile) {
+          try {
+             // We can't easily log logout on client side disconnect but we can try before signOut
+          } catch(e) {}
+        }
         setUser(null);
         setAdminProfile(null);
       }
@@ -328,7 +393,7 @@ export default function App() {
               active={activeTab === 'records'} 
               onClick={() => setActiveTab('records')} 
             />
-            {adminProfile?.role === 'super-admin' && (
+            {adminProfile && (
               <SidebarItem 
                 icon={<Users size={20} />} 
                 label="Manage Admins" 
@@ -336,6 +401,12 @@ export default function App() {
                 onClick={() => setActiveTab('admins')} 
               />
             )}
+            <SidebarItem 
+              icon={<History size={20} />} 
+              label="Activity Log" 
+              active={activeTab === 'logs'} 
+              onClick={() => setActiveTab('logs')} 
+            />
           </nav>
 
           <div className="p-4 border-t border-gray-100">
@@ -374,9 +445,10 @@ export default function App() {
           <div className="p-8 max-w-7xl mx-auto">
             <AnimatePresence mode="wait">
               {activeTab === 'dashboard' && <DashboardView setActiveTab={setActiveTab} />}
-              {activeTab === 'create' && <CreateReportView adminProfile={adminProfile} showToast={showToast} />}
-              {activeTab === 'records' && <RecordsView adminProfile={adminProfile} showToast={showToast} />}
-              {activeTab === 'admins' && <AdminsView showToast={showToast} />}
+              {activeTab === 'create' && <CreateReportView adminProfile={adminProfile} showToast={showToast} logActivity={logActivity} />}
+              {activeTab === 'records' && <RecordsView adminProfile={adminProfile} showToast={showToast} logActivity={logActivity} />}
+              {activeTab === 'admins' && <AdminsView showToast={showToast} logActivity={logActivity} />}
+              {activeTab === 'logs' && <LogsView />}
             </AnimatePresence>
           </div>
         </main>
@@ -442,8 +514,10 @@ function LoginPage() {
     } catch (err: any) {
       if (err.code === 'auth/email-already-in-use') {
         setError('This email is already registered. Please sign in instead.');
-      } else if (err.code === 'auth/invalid-credential') {
-        setError('Invalid email or password. Please try again.');
+      } else if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found') {
+        setError('Invalid email or password. If you are a new admin, please use the SIGN UP tab to set your password and activate your account.');
+      } else if (err.code === 'auth/operation-not-allowed') {
+        setError('Email/Password login is not enabled in Firebase. Please enable it in your Firebase Console under Authentication > Sign-in method.');
       } else if (err.code === 'auth/weak-password') {
         setError('Password should be at least 6 characters.');
       } else {
@@ -496,7 +570,7 @@ function LoginPage() {
             <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-2xl mb-4">
               <p className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest mb-1">Notice for New Admins</p>
               <p className="text-xs text-indigo-800 leading-relaxed">
-                If you have been added as an admin but don't have a password yet, please use the <strong>SIGN UP</strong> tab below to create your account.
+                If you have been added as an admin by the Super Admin, please use the <strong>SIGN UP</strong> tab below with your official email to activate your account.
               </p>
             </div>
 
@@ -627,6 +701,34 @@ function LoginPage() {
 }
 
 function DashboardView({ setActiveTab }: { setActiveTab: (tab: any) => void }) {
+  const [stats, setStats] = useState({ reports: 0, admins: 0, pending: 0 });
+  const [recentLogs, setRecentLogs] = useState<AuditLog[]>([]);
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'auditLogs'),
+      orderBy('timestamp', 'desc'),
+      limit(5)
+    );
+    const unsubscribeLogs = onSnapshot(q, (snapshot) => {
+      setRecentLogs(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }) as AuditLog));
+    });
+
+    const unsubscribeReports = onSnapshot(collection(db, 'reports'), (snap) => {
+      setStats(prev => ({ ...prev, reports: snap.size }));
+    });
+
+    const unsubscribeAdmins = onSnapshot(collection(db, 'admins'), (snap) => {
+      setStats(prev => ({ ...prev, admins: snap.size }));
+    });
+
+    return () => {
+      unsubscribeLogs();
+      unsubscribeReports();
+      unsubscribeAdmins();
+    };
+  }, []);
+
   return (
     <motion.div 
       initial={{ opacity: 0, x: 20 }}
@@ -637,20 +739,20 @@ function DashboardView({ setActiveTab }: { setActiveTab: (tab: any) => void }) {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <StatCard 
           title="Total Reports" 
-          value="0" 
-          change="No reports generated yet" 
+          value={stats.reports.toString()} 
+          change={`${stats.reports} generated to date`} 
           icon={<FileText className="text-indigo-600" />} 
         />
         <StatCard 
           title="Samples Analyzed" 
-          value="0" 
-          change="No samples analyzed yet" 
+          value={stats.reports.toString()} 
+          change="Laboratory analysis records" 
           icon={<Database className="text-emerald-600" />} 
         />
         <StatCard 
           title="Active Admins" 
-          value="0" 
-          change="No active admins" 
+          value={stats.admins.toString()} 
+          change="Authorized system personnel" 
           icon={<ShieldCheck className="text-blue-600" />} 
         />
       </div>
@@ -684,13 +786,44 @@ function DashboardView({ setActiveTab }: { setActiveTab: (tab: any) => void }) {
 
         <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
           <h3 className="text-lg font-bold text-gray-900 mb-6">Recent Activity</h3>
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 mb-4">
-              <FileText size={32} />
+          {recentLogs.length > 0 ? (
+            <div className="space-y-6">
+              {recentLogs.map((log) => (
+                <div key={log.id} className="flex gap-4 items-start pb-4 border-b border-gray-50 last:border-0 last:pb-0">
+                  <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center shrink-0">
+                    <History size={18} className="text-indigo-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-start mb-1">
+                      <p className="text-sm font-bold text-gray-900 truncate">{log.action.replace(/_/g, ' ')}</p>
+                      <span className="text-[10px] text-gray-400 font-mono">
+                        {log.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-600 line-clamp-1">{log.details}</p>
+                    <div className="flex items-center gap-2 mt-2">
+                       <span className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter bg-gray-50 px-2 py-0.5 rounded-full">
+                         {log.userDisplayName}
+                       </span>
+                       <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-tighter">
+                         {log.userRole}
+                       </span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <Button variant="ghost" className="w-full mt-2" onClick={() => setActiveTab('logs')}>
+                View Full Audit Trail
+                <ChevronRight size={16} className="ml-1" />
+              </Button>
             </div>
-            <p className="text-sm font-bold text-gray-900">No Recent Activity</p>
-            <p className="text-xs text-gray-500 mt-1">New activities will appear here as you use the system.</p>
-          </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-12 text-center text-gray-400">
+              <ClipboardList size={32} className="mb-4 opacity-20" />
+              <p className="text-sm font-bold">No Recent Activity</p>
+              <p className="text-xs mt-1">Activities will appear here.</p>
+            </div>
+          )}
         </div>
       </div>
     </motion.div>
@@ -729,11 +862,12 @@ function QuickAction({ icon, label, onClick }: { icon: React.ReactNode; label: s
   );
 }
 
-function CreateReportView({ adminProfile, initialData, onComplete, showToast }: { 
+function CreateReportView({ adminProfile, initialData, onComplete, showToast, logActivity }: { 
   adminProfile: AdminProfile | null; 
   initialData?: AnalysisReport; 
   onComplete?: () => void;
   showToast: (message: string, type?: 'success' | 'error') => void;
+  logActivity: (params: any) => Promise<void>;
 }) {
   const [reportType, setReportType] = useState<ReportType>(initialData?.reportType || 'Biological');
   const [clientInfo, setClientInfo] = useState<ClientInfo>(initialData?.clientInfo || {
@@ -743,11 +877,12 @@ function CreateReportView({ adminProfile, initialData, onComplete, showToast }: 
     projectName: '', projectNumber: '', sampleId: '', sampleSubtype: '', samplingDate: '', samplingTime: '', samplePreparationDate: '', samplePreparationTime: ''
   });
   const [testResults, setTestResults] = useState<TestResult[]>(initialData?.testResults || DEFAULT_TESTS['Biological']);
+  const [signatureUrl, setSignatureUrl] = useState<string | undefined>(initialData?.signatureUrl || adminProfile?.signatureUrl);
   const [analysisInfo, setAnalysisInfo] = useState<AnalysisInfo>(initialData?.analysisInfo || {
     analysisDate: new Date().toISOString().split('T')[0],
     analysisTime: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
     analysisBy: adminProfile?.displayName || '',
-    qcReportingBy: 'Marubetsy Alcina'
+    qcReportingBy: 'Quality Manager'
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -786,6 +921,7 @@ function CreateReportView({ adminProfile, initialData, onComplete, showToast }: 
         sampleInfo,
         testResults,
         analysisInfo,
+        signatureUrl,
         createdAt: initialData?.createdAt || serverTimestamp(),
         createdBy: initialData?.createdBy || adminProfile?.uid || 'system'
       };
@@ -796,6 +932,14 @@ function CreateReportView({ adminProfile, initialData, onComplete, showToast }: 
 
       // Save to Firestore in background (or at least after PDF is triggered)
       await setDoc(doc(db, 'reports', reportId), report);
+
+      await logActivity({
+        action: initialData ? 'UPDATED_REPORT' : 'CREATED_REPORT',
+        module: 'Reports',
+        details: `${initialData ? 'Updated' : 'Created'} report ${reportId} for client ${clientInfo.clientName} (Sample ID: ${sampleInfo.sampleId})`,
+        previousValues: initialData || null,
+        updatedValues: report
+      });
 
       showToast(initialData ? 'Report updated successfully!' : 'Report generated and saved successfully!');
       if (onComplete) onComplete();
@@ -1003,8 +1147,114 @@ function CreateReportView({ adminProfile, initialData, onComplete, showToast }: 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
             <Input label="Analysis Date" type="date" value={analysisInfo.analysisDate} onChange={e => setAnalysisInfo({...analysisInfo, analysisDate: e.target.value})} required />
             <Input label="Analysis Time" type="time" value={analysisInfo.analysisTime} onChange={e => setAnalysisInfo({...analysisInfo, analysisTime: e.target.value})} required />
-            <Input label="Analysis By" value={analysisInfo.analysisBy} onChange={e => setAnalysisInfo({...analysisInfo, analysisBy: e.target.value})} required />
-            <Input label="QC Reporting By" value={analysisInfo.qcReportingBy} onChange={e => setAnalysisInfo({...analysisInfo, qcReportingBy: e.target.value})} required />
+            <Input label="Full Name" value={analysisInfo.analysisBy} onChange={e => setAnalysisInfo({...analysisInfo, analysisBy: e.target.value})} required />
+            <Input label="Authorized Role" value={analysisInfo.qcReportingBy} onChange={e => setAnalysisInfo({...analysisInfo, qcReportingBy: e.target.value})} required />
+          </div>
+        </section>
+
+        {/* E-Sign Section */}
+        <section className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600">
+                <ImageIcon size={20} />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900">Digital Signature Authorization</h3>
+            </div>
+            {signatureUrl && (
+              <Button type="button" variant="ghost" size="sm" className="text-red-500 hover:text-red-600" onClick={() => setSignatureUrl(undefined)}>
+                <Trash2 size={16} className="mr-2" />
+                Clear Signature
+              </Button>
+            )}
+          </div>
+
+          <div className="flex flex-col md:flex-row gap-8 items-center">
+            <div className="flex-1 w-full space-y-4">
+              <div className="p-6 border-2 border-dashed border-gray-100 rounded-3xl bg-gray-50 flex flex-col items-center justify-center min-h-[120px] text-center">
+                {signatureUrl ? (
+                  <div className="relative group">
+                    <img src={signatureUrl} alt="Signature" className="max-h-24 object-contain mx-auto mix-blend-multiply" />
+                    <div className="absolute inset-0 bg-black/5 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg pointer-events-none" />
+                  </div>
+                ) : (
+                  <>
+                    <Upload className="w-8 h-8 text-gray-300 mb-2" />
+                    <p className="text-sm font-bold text-gray-900">Insert E-Sign</p>
+                    <p className="text-xs text-gray-500">Upload your digital signature to authorize this report</p>
+                  </>
+                )}
+              </div>
+              
+              <div className="flex gap-3">
+                <label className="flex-1">
+                  <input 
+                    type="file" 
+                    className="hidden" 
+                    accept="image/*" 
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = async (event) => {
+                          const base64 = event.target?.result as string;
+                          setSignatureUrl(base64);
+                          
+                          // Proactively save to profile if user requests
+                          if (adminProfile?.uid) {
+                            try {
+                              await setDoc(doc(db, 'admins', adminProfile.uid), { ...adminProfile, signatureUrl: base64 }, { merge: true });
+                            } catch (err) {
+                              console.error('Failed to auto-save signature to profile:', err);
+                            }
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                  />
+                  <div className="w-full h-11 bg-white border border-indigo-100 text-indigo-600 rounded-xl font-bold text-sm flex items-center justify-center cursor-pointer hover:bg-indigo-50 transition-all">
+                    <Upload size={16} className="mr-2" />
+                    {signatureUrl ? 'Change Signature' : 'Upload Signature'}
+                  </div>
+                </label>
+                
+                {!signatureUrl && adminProfile?.signatureUrl && (
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    className="flex-1"
+                    onClick={() => setSignatureUrl(adminProfile.signatureUrl)}
+                  >
+                    <ImageIcon size={16} className="mr-2" />
+                    Use Saved Signature
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="w-full md:w-72 bg-indigo-50/50 p-6 rounded-3xl border border-indigo-100">
+              <p className="text-xs font-bold text-indigo-900 mb-2 uppercase tracking-wider">Authorization Preview</p>
+              <div className="p-4 bg-white rounded-2xl border border-indigo-100 space-y-2">
+                <p className="text-[10px] text-gray-400">Reviewed and Authorized by:</p>
+                <div className="h-10 flex items-center">
+                  {signatureUrl ? (
+                    <img src={signatureUrl} alt="sig" className="h-full object-contain mix-blend-multiply" />
+                  ) : (
+                    <div className="w-full h-full border border-dashed border-gray-100 rounded flex items-center justify-center">
+                      <span className="text-[8px] text-gray-300 italic">Signature will appear here</span>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-900">{analysisInfo.analysisBy || 'Name'}</p>
+                  <p className="text-[9px] text-gray-500 italic">{analysisInfo.qcReportingBy}</p>
+                </div>
+              </div>
+              <p className="text-[10px] text-indigo-400 mt-4 leading-normal">
+                By inserting your digital signature, you verify that the analytical data has undergone validation using standard quality control measures.
+              </p>
+            </div>
           </div>
         </section>
 
@@ -1019,7 +1269,7 @@ function CreateReportView({ adminProfile, initialData, onComplete, showToast }: 
   );
 }
 
-function RecordsView({ adminProfile, showToast }: { adminProfile: AdminProfile | null; showToast: (message: string, type?: 'success' | 'error') => void }) {
+function RecordsView({ adminProfile, showToast, logActivity }: { adminProfile: AdminProfile | null; showToast: (message: string, type?: 'success' | 'error') => void; logActivity: (params: any) => Promise<void> }) {
   const [reports, setReports] = useState<AnalysisReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -1052,8 +1302,19 @@ function RecordsView({ adminProfile, showToast }: { adminProfile: AdminProfile |
 
   const handleDelete = async () => {
     if (!reportToDelete) return;
+    const report = reports.find(r => r.reportId === reportToDelete);
     try {
       await deleteDoc(doc(db, 'reports', reportToDelete));
+      
+      if (report) {
+        await logActivity({
+          action: 'DELETED_REPORT',
+          module: 'Reports',
+          details: `Deleted report ${report.reportId} for client ${report.clientInfo.clientName}`,
+          previousValues: report
+        });
+      }
+
       setReportToDelete(null);
       showToast('Record deleted successfully');
     } catch (error) {
@@ -1081,6 +1342,7 @@ function RecordsView({ adminProfile, showToast }: { adminProfile: AdminProfile |
           initialData={editingReport} 
           onComplete={() => setEditingReport(null)} 
           showToast={showToast}
+          logActivity={logActivity}
         />
       </div>
     );
@@ -1140,6 +1402,10 @@ function RecordsView({ adminProfile, showToast }: { adminProfile: AdminProfile |
           </div>
           <Button variant="secondary" onClick={() => {setSearchTerm(''); setDateFilter(''); setTypeFilter('All');}}>
             Reset
+          </Button>
+          <Button variant="outline" onClick={() => exportToExcel(filteredReports)}>
+            <FileSpreadsheet size={18} className="mr-2" />
+            Save to Excel
           </Button>
         </div>
       </div>
@@ -1244,7 +1510,7 @@ function RecordsView({ adminProfile, showToast }: { adminProfile: AdminProfile |
   );
 }
 
-function AdminsView({ showToast }: { showToast: (message: string, type?: 'success' | 'error') => void }) {
+function AdminsView({ showToast, logActivity }: { showToast: (message: string, type?: 'success' | 'error') => void; logActivity: (params: any) => Promise<void> }) {
   const [admins, setAdmins] = useState<AdminProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -1257,6 +1523,7 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
   const [role, setRole] = useState<UserRole>('admin');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [adminToDelete, setAdminToDelete] = useState<string | null>(null);
+  const [editingAdmin, setEditingAdmin] = useState<AdminProfile | null>(null);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'admins'), (snapshot) => {
@@ -1271,34 +1538,79 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      // Note: In a real app, you'd use a Cloud Function to create users without logging out.
-      // Here we'll just simulate it or explain the limitation.
-      // For this demo, we'll create the document in Firestore.
-      // The user would still need to be created in Auth.
-      
-      const tempUid = `user_${Date.now()}`; // Placeholder UID
-      const newAdmin: AdminProfile = {
-        uid: tempUid,
+      // Create user record in Firestore using email as ID for easy lookup during "claim"
+      const adminData: AdminProfile = {
+        uid: null, // To be filled when claimed
         adminId,
         email,
         role,
         displayName,
         isActive: true,
-        createdAt: serverTimestamp()
+        claimed: false,
+        createdAt: serverTimestamp(),
       };
 
-      await setDoc(doc(db, 'admins', tempUid), newAdmin);
-      // alert('Admin record created. Note: In this environment, the actual Auth account must be created separately or via a Cloud Function.');
+      // We use the email as the document ID for unclaimed records.
+      // The rules allow a super-admin to write to any admin record.
+      await setDoc(doc(db, 'admins', email), adminData);
+
+      await logActivity({
+        action: 'CREATED_ADMIN',
+        module: 'Admin Management',
+        details: `Created new admin: ${displayName} (${email}) with role ${role}`,
+        updatedValues: adminData
+      });
+
+      showToast(`Admin ${displayName} added. They must now use the 'SIGN UP' tab to set their password.`);
       setIsModalOpen(false);
       resetForm();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'admins');
+    } catch (error: any) {
+      showToast(`Creation failed: ${error.message}. Ensure you have enabled Email/Password in Firebase Console.`, 'error');
+      console.error('Error creating admin:', error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleEditAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAdmin) return;
+    setIsSubmitting(true);
+    try {
+      const response = await fetch('/api/admins/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: editingAdmin.uid || editingAdmin.email, // Use email as ID if not claimed
+          adminId,
+          password: password || undefined
+        })
+      });
+      
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Update failed');
+
+      await logActivity({
+        action: 'EDITED_ADMIN',
+        module: 'Admin Management',
+        details: `Updated admin ${editingAdmin.displayName}. Admin ID: ${adminId}. Password updated: ${password ? 'Yes' : 'No'}`,
+        previousValues: { adminId: editingAdmin.adminId },
+        updatedValues: { adminId }
+      });
+
+      showToast('Admin updated successfully');
+      setEditingAdmin(null);
+      setIsModalOpen(false);
+      resetForm();
+    } catch (error: any) {
+      showToast(error.message, 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const resetForm = () => {
+    setEditingAdmin(null);
     setEmail('');
     setPassword('');
     setDisplayName('');
@@ -1308,7 +1620,17 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
 
   const toggleStatus = async (admin: AdminProfile) => {
     try {
-      await setDoc(doc(db, 'admins', admin.uid), { ...admin, isActive: !admin.isActive });
+      const newStatus = !admin.isActive;
+      const docId = admin.uid || admin.email;
+      await setDoc(doc(db, 'admins', docId), { ...admin, isActive: newStatus });
+      
+      await logActivity({
+        action: 'TOGGLE_ADMIN_STATUS',
+        module: 'Admin Management',
+        details: `${newStatus ? 'Activated' : 'Disabled'} admin: ${admin.displayName}`,
+        previousValues: { isActive: admin.isActive },
+        updatedValues: { isActive: newStatus }
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'admins');
     }
@@ -1316,8 +1638,19 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
 
   const handleDelete = async () => {
     if (!adminToDelete) return;
+    const admin = admins.find(a => (a.uid || a.email) === adminToDelete);
     try {
       await deleteDoc(doc(db, 'admins', adminToDelete));
+      
+      if (admin) {
+        await logActivity({
+          action: 'DELETED_ADMIN',
+          module: 'Admin Management',
+          details: `Deleted admin: ${admin.displayName} (${admin.email})`,
+          previousValues: admin
+        });
+      }
+
       setAdminToDelete(null);
       showToast('Admin deleted successfully');
     } catch (error) {
@@ -1372,7 +1705,7 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
                 </tr>
               ) : (
                 admins.map((admin) => (
-                  <tr key={admin.uid} className="hover:bg-gray-50/50 transition-colors">
+                  <tr key={admin.uid || admin.email} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600 font-bold">
@@ -1388,7 +1721,10 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
                     <td className="px-6 py-4">
                       <span className={cn(
                         "text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider",
-                        admin.role === 'super-admin' ? "bg-purple-50 text-purple-600" : "bg-blue-50 text-blue-600"
+                        admin.role === 'super-admin' ? "bg-purple-100 text-purple-700" : 
+                        admin.role === 'admin' ? "bg-blue-100 text-blue-700" :
+                        admin.role === 'reviewer' ? "bg-amber-100 text-amber-700" :
+                        "bg-gray-100 text-gray-700"
                       )}>
                         {admin.role}
                       </span>
@@ -1407,6 +1743,21 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button 
+                          onClick={() => {
+                            setEditingAdmin(admin);
+                            setAdminId(admin.adminId);
+                            setEmail(admin.email);
+                            setDisplayName(admin.displayName);
+                            setRole(admin.role);
+                            setPassword('');
+                            setIsModalOpen(true);
+                          }}
+                          className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                          title="Edit Admin"
+                        >
+                          <Edit size={18} />
+                        </button>
+                        <button 
                           onClick={() => handleResetPassword(admin.email)}
                           className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
                           title="Send Password Reset"
@@ -1414,7 +1765,7 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
                           <ShieldCheck size={18} />
                         </button>
                         <button 
-                          onClick={() => setAdminToDelete(admin.uid)}
+                          onClick={() => setAdminToDelete(admin.uid || admin.email)}
                           className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
                           title="Delete Admin"
                         >
@@ -1448,7 +1799,7 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
         </div>
       </Modal>
 
-      {/* Add Admin Modal */}
+      {/* Add/Edit Admin Modal */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
@@ -1459,55 +1810,270 @@ function AdminsView({ showToast }: { showToast: (message: string, type?: 'succes
               className="bg-white rounded-[2.5rem] w-full max-w-lg p-8 shadow-2xl"
             >
               <div className="flex justify-between items-center mb-8">
-                <h3 className="text-2xl font-bold text-gray-900">Add New Admin</h3>
-                <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+                <h3 className="text-2xl font-bold text-gray-900">{editingAdmin ? 'Edit Admin' : 'Add New Admin'}</h3>
+                <button onClick={() => { setIsModalOpen(false); setEditingAdmin(null); }} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
                   <X size={24} />
                 </button>
               </div>
 
-              <form onSubmit={handleAddAdmin} className="space-y-6">
+              <form onSubmit={editingAdmin ? handleEditAdmin : handleAddAdmin} className="space-y-6">
+                {!editingAdmin && (
+                  <div className="bg-blue-50 p-4 rounded-2xl flex gap-3 items-start border border-blue-100">
+                    <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
+                    <div className="text-sm text-blue-700">
+                      <p className="font-bold mb-1">Activation Required</p>
+                      <p className="text-xs leading-relaxed opacity-90">After you add this admin, they must go to the <strong>SIGN UP</strong> tab on the login page and use their email to set a password. This process activates their account.</p>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="grid grid-cols-2 gap-4">
                   <Input label="Admin ID" value={adminId} onChange={e => setAdminId(e.target.value)} required placeholder="e.g. ADM001" />
-                  <Input label="Full Name" value={displayName} onChange={e => setDisplayName(e.target.value)} required placeholder="John Doe" />
-                </div>
-                <Input label="Email Address" type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="admin@biocomlabs.com" />
-                <Input label="Temporary Password" type="password" value={password} onChange={e => setPassword(e.target.value)} required placeholder="••••••••" />
-                
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</label>
-                  <div className="flex gap-4">
-                    <button 
-                      type="button"
-                      onClick={() => setRole('admin')}
-                      className={cn(
-                        "flex-1 py-3 rounded-xl border-2 transition-all font-bold text-sm",
-                        role === 'admin' ? "border-indigo-600 bg-indigo-50 text-indigo-600" : "border-gray-100 text-gray-400"
-                      )}
-                    >
-                      Admin
-                    </button>
-                    <button 
-                      type="button"
-                      onClick={() => setRole('super-admin')}
-                      className={cn(
-                        "flex-1 py-3 rounded-xl border-2 transition-all font-bold text-sm",
-                        role === 'super-admin' ? "border-indigo-600 bg-indigo-50 text-indigo-600" : "border-gray-100 text-gray-400"
-                      )}
-                    >
-                      Super Admin
-                    </button>
-                  </div>
+                  <Input 
+                    label="Full Name" 
+                    value={displayName} 
+                    onChange={e => setDisplayName(e.target.value)} 
+                    required 
+                    placeholder="John Doe" 
+                    disabled={!!editingAdmin}
+                  />
                 </div>
 
+                <Input 
+                  label="Email Address" 
+                  type="email" 
+                  value={email} 
+                  onChange={e => setEmail(e.target.value)} 
+                  required 
+                  placeholder="admin@biocomlabs.com" 
+                  disabled={!!editingAdmin}
+                />
+
+                {editingAdmin && (
+                  <Input 
+                    label="New Password" 
+                    type="password" 
+                    value={password} 
+                    onChange={e => setPassword(e.target.value)} 
+                    placeholder="Leave blank to keep current" 
+                  />
+                )}
+                
+                {!editingAdmin && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</label>
+                    <div className="grid grid-cols-3 gap-3">
+                      <button 
+                        type="button"
+                        onClick={() => setRole('admin')}
+                        className={cn(
+                          "py-3 rounded-xl border-2 transition-all font-bold text-[10px] uppercase tracking-wider",
+                          role === 'admin' ? "border-indigo-600 bg-indigo-50 text-indigo-600 shadow-sm" : "border-gray-100 text-gray-400 opacity-60"
+                        )}
+                      >
+                        Admin
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setRole('reviewer')}
+                        className={cn(
+                          "py-3 rounded-xl border-2 transition-all font-bold text-[10px] uppercase tracking-wider",
+                          role === 'reviewer' ? "border-indigo-600 bg-indigo-50 text-indigo-600 shadow-sm" : "border-gray-100 text-gray-400 opacity-60"
+                        )}
+                      >
+                        Reviewer
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setRole('analyst')}
+                        className={cn(
+                          "py-3 rounded-xl border-2 transition-all font-bold text-[10px] uppercase tracking-wider",
+                          role === 'analyst' ? "border-indigo-600 bg-indigo-50 text-indigo-600 shadow-sm" : "border-gray-100 text-gray-400 opacity-60"
+                        )}
+                      >
+                        Analyst
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex gap-4 pt-4">
-                  <Button type="button" variant="secondary" className="flex-1" onClick={() => setIsModalOpen(false)}>Cancel</Button>
-                  <Button type="submit" className="flex-1" isLoading={isSubmitting}>Create Account</Button>
+                  <Button type="button" variant="secondary" className="flex-1" onClick={() => { setIsModalOpen(false); setEditingAdmin(null); }}>Cancel</Button>
+                  <Button type="submit" className="flex-1" isLoading={isSubmitting}>
+                    {editingAdmin ? 'Update Admin' : 'Create Account'}
+                  </Button>
                 </div>
               </form>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
+    </motion.div>
+  );
+}
+
+function LogsView() {
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('');
+  const [moduleFilter, setModuleFilter] = useState('All');
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'auditLogs'),
+      orderBy('timestamp', 'desc')
+    );
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({
+        ...doc.data(),
+        id: doc.id
+      })) as AuditLog[];
+      setLogs(data);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const filteredLogs = logs.filter(log => {
+    const matchesSearch = 
+      log.userDisplayName.toLowerCase().includes(filter.toLowerCase()) ||
+      log.action.toLowerCase().includes(filter.toLowerCase()) ||
+      log.details?.toLowerCase().includes(filter.toLowerCase());
+    
+    const matchesModule = moduleFilter === 'All' || log.module === moduleFilter;
+    
+    return matchesSearch && matchesModule;
+  });
+
+  const modules = ['All', ...Array.from(new Set(logs.map(l => l.module)))];
+
+  const formatTimestamp = (ts: any) => {
+    if (!ts) return 'Pending...';
+    const date = ts.toDate();
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="space-y-6"
+    >
+      <div className="flex justify-between items-end">
+        <div>
+          <h3 className="text-xl font-bold text-gray-900">Activity Log</h3>
+          <p className="text-sm text-gray-500">21 CFR Part 11 Compliant Audit Trail</p>
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1 min-w-[240px] relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <input 
+              type="text"
+              placeholder="Search activity..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="w-full pl-12 pr-4 py-3 bg-white border border-gray-100 rounded-2xl text-sm focus:ring-2 focus:ring-indigo-500 transition-all shadow-sm outline-none"
+            />
+          </div>
+          <div className="relative">
+            <Filter className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <select
+              value={moduleFilter}
+              onChange={(e) => setModuleFilter(e.target.value)}
+              className="pl-12 pr-10 py-3 bg-white border border-gray-100 rounded-2xl text-sm focus:ring-2 focus:ring-indigo-500 appearance-none shadow-sm outline-none font-medium cursor-pointer"
+            >
+              {modules.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <Button variant="outline" onClick={() => exportLogsToCSV(filteredLogs)}>
+            <FileSpreadsheet size={18} className="mr-2" />
+            CSV
+          </Button>
+          <Button variant="outline" onClick={() => exportLogsToPDF(filteredLogs)}>
+            <FileText size={18} className="mr-2" />
+            PDF
+          </Button>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-[2rem] border border-gray-100 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-gray-50 text-left border-b border-gray-100">
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">Timestamp</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">User / Role</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">Action</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">Module</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">Details</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
+                    <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2 text-indigo-600" />
+                    Loading audit trail...
+                  </td>
+                </tr>
+              ) : filteredLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-12 text-center text-gray-400 text-sm">
+                    No activity logs found.
+                  </td>
+                </tr>
+              ) : (
+                filteredLogs.map((log) => (
+                  <tr key={log.id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-6 py-4 text-xs font-mono text-gray-500 whitespace-nowrap">
+                      {formatTimestamp(log.timestamp)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <p className="text-sm font-bold text-gray-900">{log.userDisplayName}</p>
+                      <p className="text-[10px] text-indigo-600 font-bold uppercase tracking-tighter">{log.userRole}</p>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="text-[10px] font-bold px-2 py-1 bg-indigo-50 text-indigo-700 rounded-lg uppercase tracking-wider">
+                        {log.action.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-xs font-medium text-gray-600 whitespace-nowrap">
+                      {log.module}
+                    </td>
+                    <td className="px-6 py-4 max-w-sm">
+                      <p className="text-xs text-gray-700 leading-relaxed">{log.details}</p>
+                      {log.updatedValues && (
+                        <div className="mt-2 p-2 bg-gray-50 rounded-lg border border-gray-100 text-[10px] font-mono text-gray-500 overflow-x-auto max-h-40">
+                          <div>
+                            <span className="text-emerald-500 font-bold mr-1">ACTION DETAILS:</span>
+                            {JSON.stringify(log.updatedValues)}
+                          </div>
+                        </div>
+                      )}
+                      {log.signatureDetails && (
+                        <div className="mt-2 flex items-center gap-2 text-emerald-600 bg-emerald-50 px-2 py-1 rounded inline-flex">
+                          <ShieldCheck size={12} />
+                          <span className="text-[10px] font-bold uppercase">Electronically Signed</span>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </motion.div>
   );
 }

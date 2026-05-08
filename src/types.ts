@@ -1,13 +1,34 @@
-export type UserRole = 'super-admin' | 'admin';
+export type UserRole = 'super-admin' | 'admin' | 'analyst' | 'reviewer';
 
 export interface AdminProfile {
-  uid: string;
+  uid: string | null;
   adminId: string;
   email: string;
   role: UserRole;
   displayName: string;
   isActive: boolean;
+  claimed?: boolean;
   createdAt: any;
+  signatureUrl?: string;
+}
+
+export interface AuditLog {
+  id: string;
+  userId: string;
+  userEmail: string;
+  userDisplayName: string;
+  userRole: UserRole;
+  timestamp: any;
+  action: string;
+  module: string;
+  details?: string;
+  previousValues?: any;
+  updatedValues?: any;
+  signatureDetails?: {
+    signedBy: string;
+    signedAt: any;
+    reason?: string;
+  };
 }
 
 export interface ClientInfo {
@@ -59,6 +80,7 @@ export interface AnalysisReport {
   analysisInfo: AnalysisInfo;
   createdAt: any;
   createdBy: string;
+  signatureUrl?: string;
 }
 
 export enum OperationType {

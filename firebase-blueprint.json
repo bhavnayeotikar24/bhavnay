@@ -8,7 +8,7 @@
         "uid": { "type": "string", "description": "Firebase Auth UID" },
         "adminId": { "type": "string", "description": "Unique Admin Identifier" },
         "email": { "type": "string", "description": "Admin email address" },
-        "role": { "type": "string", "enum": ["super-admin", "admin"], "description": "User role" },
+        "role": { "type": "string", "enum": ["super-admin", "admin", "analyst", "reviewer"], "description": "User role" },
         "displayName": { "type": "string", "description": "Full name of the admin" },
         "isActive": { "type": "boolean", "description": "Whether the account is active" },
         "createdAt": { "type": "string", "format": "date-time" }
@@ -73,6 +73,33 @@
         "createdAt": { "type": "string", "format": "date-time" },
         "createdBy": { "type": "string" }
       }
+    },
+    "AuditLog": {
+      "title": "Audit Log",
+      "description": "Secure, non-editable audit trail for system actions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userDisplayName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "action": { "type": "string" },
+        "module": { "type": "string" },
+        "details": { "type": "string" },
+        "previousValues": { "type": "object" },
+        "updatedValues": { "type": "object" },
+        "signatureDetails": {
+          "type": "object",
+          "properties": {
+            "signedBy": { "type": "string" },
+            "signedAt": { "type": "string", "format": "date-time" },
+            "reason": { "type": "string" }
+          }
+        }
+      },
+      "required": ["id", "userId", "userEmail", "timestamp", "action", "module"]
     }
   },
   "firestore": {
@@ -83,6 +110,10 @@
     "/reports/{reportId}": {
       "schema": "AnalysisReport",
       "description": "Collection of analysis reports"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System audit logs"
     }
   }
 }
