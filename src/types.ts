@@ -1,13 +1,17 @@
-export type UserRole = 'super-admin' | 'admin' | 'analyst' | 'reviewer';
+export type UserRole = 'super-admin' | 'admin' | 'analyst' | 'quality-manager';
+
+export type UserStatus = 'Pending Approval' | 'Approved' | 'Rejected';
 
 export interface AdminProfile {
-  uid: string | null;
+  uid?: string;
   adminId: string;
   email: string;
   role: UserRole;
   displayName: string;
   isActive: boolean;
-  claimed?: boolean;
+  status: UserStatus;
+  isPermanent?: boolean;
+  password?: string;
   createdAt: any;
   signatureUrl?: string;
 }
@@ -99,14 +103,5 @@ export interface FirestoreErrorInfo {
   authInfo: {
     userId?: string;
     email?: string | null;
-    emailVerified?: boolean;
-    isAnonymous?: boolean;
-    tenantId?: string | null;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
   }
 }

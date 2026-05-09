@@ -1,142 +1,180 @@
-// ===============================================================
-// Assumed Data Model
-// ===============================================================
-//
-// Collection: admins
-// Document ID: {uid}
-// Fields:
-//   - uid: string (required) - Firebase Auth UID
-//   - adminId: string (required) - Unique Admin Identifier
-//   - email: string (required) - Admin email address
-//   - role: string (required) - 'super-admin' or 'admin'
-//   - displayName: string (optional) - Full name
-//   - isActive: boolean (required) - Account status
-//   - createdAt: timestamp (optional)
-//
-// Collection: reports
-// Document ID: {reportId}
-// Fields:
-//   - reportId: string (required)
-//   - clientInfo: map (required) - Client details
-//   - sampleInfo: map (required) - Sample details
-//   - testResults: list (required) - Array of test result maps
-//   - analysisInfo: map (required) - Analysis metadata
-//   - createdAt: timestamp (required)
-//   - createdBy: string (required) - UID of creator
-//
-// ===============================================================
-
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-
+    
     // ===============================================================
-    // Helper Functions
+    // 0. Global Safety Net & Helpers
     // ===============================================================
+    
+    // Default deny for everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
 
-    function isAuthenticated() {
+    // Helper: Is the user signed in?
+    function isSignedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+    // Helper: Is the document ID valid (Prevents ID Poisoning)
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    function isAdmin() {
-      return isAuthenticated() && (
-        request.auth.token.email == "bhavnayeotikar@gmail.com" ||
-        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.isActive == true &&
-         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'super-admin', 'analyst', 'reviewer'])
-      );
+    // Sugar for data
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // Role helpers - explicitly look up role from the source of truth (admins collection)
+    // Note: Use get() to bypass rules and check the actual document data.
+    function getAdminData() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
+    }
+
+    function isApproved() {
+      let data = getAdminData();
+      return data.status == 'Approved';
     }
 
     function isSuperAdmin() {
-      return isAuthenticated() && (
-        request.auth.token.email == "bhavnayeotikar@gmail.com" ||
-        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.isActive == true &&
-         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'super-admin')
-      );
+      return isSignedIn() && getAdminData().role == 'super-admin';
     }
 
-    function isValidAdmin(data) {
-      return data.keys().hasAll(['adminId', 'email', 'role', 'isActive']) &&
-             (data.uid == null || data.uid is string) &&
-             data.adminId is string && data.adminId.size() > 0 && data.adminId.size() < 50 &&
-             data.email is string && data.email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
-             data.role in ['super-admin', 'admin', 'analyst', 'reviewer'] &&
-             data.isActive is bool;
+    function isAdmin() {
+      return isSignedIn() && getAdminData().role == 'admin';
     }
 
-    function isValidReport(data) {
-      return data.keys().hasAll(['reportId', 'clientInfo', 'sampleInfo', 'testResults', 'analysisInfo', 'createdAt', 'createdBy']) &&
-             data.reportId is string &&
-             data.clientInfo is map &&
-             data.sampleInfo is map &&
-             data.testResults is list &&
-             data.analysisInfo is map &&
-             data.createdAt is timestamp &&
-             data.createdBy is string;
-    }
-
-    function isValidAuditLog(data) {
-      return data.keys().hasAll(['userId', 'userEmail', 'timestamp', 'action', 'module']) &&
-             data.userId == request.auth.uid &&
-             data.userEmail == request.auth.token.email;
+    // Permanent Admin Guard
+    function isPermanentAdmin(email) {
+      return email in [
+        'bhavnayeotikar@gmail.com', 
+        'byeotikar@ergonavgroup.com', 
+        'nfotopoulos@ergonavgroup.com'
+      ];
     }
 
     // ===============================================================
-    // Rules
+    // 1. Admins Collection (RBAC Master)
     // ===============================================================
 
-    match /admins/{docId} {
-      allow read: if isAuthenticated() && (
-        isOwner(docId) || 
-        isAdmin() || 
-        (resource != null && resource.data.email == request.auth.token.email)
-      );
-      allow create: if isAdmin() || (
-        isAuthenticated() && 
-        isValidAdmin(request.resource.data) &&
-        request.resource.data.email == request.auth.token.email &&
-        request.resource.data.uid == request.auth.uid
-      );
-      allow update: if isAuthenticated() && (
-        (isAdmin() && isValidAdmin(request.resource.data)) ||
-        (
-          resource != null && 
-          resource.data.email == request.auth.token.email && 
-          request.resource.data.email == resource.data.email &&
-          request.resource.data.uid == request.auth.uid &&
-          request.resource.data.role == resource.data.role &&
-          request.resource.data.adminId == resource.data.adminId &&
-          request.resource.data.isActive == resource.data.isActive
+    match /admins/{uid} {
+      // Schema Validation
+      function isValidAdmin(data) {
+        return data.keys().hasAll(['uid', 'adminId', 'email', 'role', 'isActive', 'status', 'createdAt'])
+          && data.keys().size() <= 12 // Strictly bound the number of fields
+          && data.uid == uid
+          && data.role in ['super-admin', 'admin', 'analyst', 'quality-manager']
+          && data.status in ['Pending Approval', 'Approved', 'Rejected']
+          && data.isActive is bool
+          && data.email is string && data.email.size() <= 100;
+      }
+
+      // Everyone signed in can see admin profiles (required for identity in the UI)
+      allow get: if isSignedIn();
+      
+      // Only Admins and Super Admins can list the full administrators table
+      allow list: if isSignedIn() && (isSuperAdmin() || isAdmin());
+      
+      // Create rules
+      allow create: if (
+        isSignedIn() && isValidId(uid) && isValidAdmin(incoming()) && (
+          // System Super Admins are auto-approved if they have the right email
+          (isPermanentAdmin(incoming().email) && incoming().role == 'super-admin' && incoming().status == 'Approved') ||
+          // Ordinary signup starts as Pending
+          (incoming().status == 'Pending Approval')
         )
       );
-      allow delete: if isAdmin() || (
-        isAuthenticated() &&
-        resource != null &&
-        resource.data.email == request.auth.token.email
+
+      // Update rules
+      allow update: if (
+        isSignedIn() && isValidId(uid) && isValidAdmin(incoming()) && (
+          // Case 1: Updating one's own profile
+          (request.auth.uid == uid && (
+            // If they are a permanent admin, they CANNOT change their role, status, or email
+            (!isPermanentAdmin(existing().email) || (
+              incoming().role == existing().role && 
+              incoming().status == existing().status && 
+              incoming().email == existing().email
+            ))
+          )) ||
+          // Case 2: Admins managing other users
+          (!isPermanentAdmin(existing().email) && (
+            isSuperAdmin() ||
+            (isAdmin() && existing().role != 'super-admin' && incoming().role != 'super-admin')
+          ))
+        )
+      );
+
+      // Delete rules
+      allow delete: if (
+        isSignedIn() && isValidId(uid) && (
+          // Cannot delete permanent admins
+          !isPermanentAdmin(existing().email) && (
+            isSuperAdmin() ||
+            // Admins can delete any non-super-admin account
+            (isAdmin() && existing().role != 'super-admin')
+          )
+        )
       );
     }
 
+    // ===============================================================
+    // 2. Reports Collection
+    // ===============================================================
+
     match /reports/{reportId} {
-      allow read: if isAdmin();
-      allow create: if isAdmin() && isValidReport(request.resource.data);
-      allow update: if isAdmin() && isValidReport(request.resource.data);
-      allow delete: if isAdmin();
+      function isValidReport(data) {
+        return data.keys().hasAll(['reportId', 'reportType', 'clientInfo', 'sampleInfo', 'testResults', 'analysisInfo', 'createdAt', 'createdBy'])
+          && data.reportId == reportId
+          && data.reportType in ['Biological', 'Biocide', 'Potable Water']
+          && data.testResults is list
+          && data.testResults.size() <= 50; // Bound list size
+      }
+
+      // All approved system users can read reports
+      allow read: if isSignedIn() && isApproved();
+      
+      allow create: if (
+        isSignedIn() && isApproved() && isValidId(reportId) && isValidReport(incoming())
+        && incoming().createdBy == request.auth.uid // Must stamp with own ID
+      );
+
+      allow update: if (
+        isSignedIn() && isApproved() && isValidId(reportId) && isValidReport(incoming()) && (
+          isSuperAdmin() || 
+          isAdmin() || 
+          // Analysts/QM can only edit their own reports
+          existing().createdBy == request.auth.uid
+        )
+      );
+
+      allow delete: if (
+        isSignedIn() && isApproved() && (isSuperAdmin() || isAdmin())
+      );
     }
+
+    // ===============================================================
+    // 3. Audit Logs (Append-Only)
+    // ===============================================================
 
     match /auditLogs/{logId} {
-      allow read: if isAdmin();
-      allow create: if isAuthenticated() && isValidAuditLog(request.resource.data);
-      allow update, delete: if false;
-    }
+      function isValidLog(data) {
+        return data.keys().hasAll(['id', 'userId', 'userEmail', 'timestamp', 'action', 'module'])
+          && data.id == logId
+          && data.userId == request.auth.uid; // Must match log to session user
+      }
 
-    // Default deny
-    match /{path=**} {
-      allow read, write: if false;
+      // Only Admins can view audit logs
+      allow read: if isSignedIn() && isApproved() && (isSuperAdmin() || isAdmin());
+      
+      // Everyone can create logs (to track their own actions)
+      allow create: if (
+        isSignedIn() && isValidId(logId) && isValidLog(incoming())
+      );
+
+      // Audit logs are tamper-proof (no updates or deletes)
+      allow update, delete: if false;
     }
   }
 }

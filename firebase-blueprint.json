@@ -8,12 +8,14 @@
         "uid": { "type": "string", "description": "Firebase Auth UID" },
         "adminId": { "type": "string", "description": "Unique Admin Identifier" },
         "email": { "type": "string", "description": "Admin email address" },
-        "role": { "type": "string", "enum": ["super-admin", "admin", "analyst", "reviewer"], "description": "User role" },
+        "role": { "type": "string", "enum": ["super-admin", "admin", "analyst", "quality-manager"], "description": "User role" },
         "displayName": { "type": "string", "description": "Full name of the admin" },
         "isActive": { "type": "boolean", "description": "Whether the account is active" },
+        "status": { "type": "string", "enum": ["Pending Approval", "Approved", "Rejected"], "description": "Approval status" },
+        "isPermanent": { "type": "boolean", "description": "Permanent super admin status" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "adminId", "email", "role", "isActive"]
+      "required": ["uid", "adminId", "email", "role", "isActive", "status"]
     },
     "AnalysisReport": {
       "title": "Analysis Report",

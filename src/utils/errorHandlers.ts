@@ -1,21 +1,17 @@
-import { auth } from '../firebase';
-import { OperationType, FirestoreErrorInfo } from '../types';
+import { OperationType, FirestoreErrorInfo, AdminProfile } from '../types';
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  let currentUser: AdminProfile | null = null;
+  try {
+    const savedUser = localStorage.getItem('user');
+    if (savedUser) currentUser = JSON.parse(savedUser);
+  } catch (e) {}
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
+      userId: currentUser?.email,
+      email: currentUser?.email
     },
     operationType,
     path

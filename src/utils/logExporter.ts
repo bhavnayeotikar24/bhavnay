@@ -9,7 +9,7 @@ export const exportLogsToCSV = (logs: AuditLog[]) => {
   const csvContent = [
     headers.join(','),
     ...logs.map(log => [
-      `"${format(log.timestamp?.toDate() || new Date(), 'yyyy-MM-dd HH:mm:ss')}"`,
+      `"${log.timestamp ? (typeof log.timestamp.toDate === 'function' ? format(log.timestamp.toDate(), 'yyyy-MM-dd HH:mm:ss') : format(new Date(log.timestamp), 'yyyy-MM-dd HH:mm:ss')) : format(new Date(), 'yyyy-MM-dd HH:mm:ss')}"`,
       `"${log.userDisplayName}"`,
       `"${log.userRole}"`,
       `"${log.action}"`,
@@ -44,7 +44,7 @@ export const exportLogsToPDF = (logs: AuditLog[]) => {
   doc.text('21 CFR Part 11 Compliant Secure Log', margin, 85);
 
   const tableData = logs.map(log => [
-    format(log.timestamp?.toDate() || new Date(), 'yyyy-MM-dd HH:mm:ss'),
+    log.timestamp ? (typeof log.timestamp.toDate === 'function' ? format(log.timestamp.toDate(), 'yyyy-MM-dd HH:mm:ss') : format(new Date(log.timestamp), 'yyyy-MM-dd HH:mm:ss')) : format(new Date(), 'yyyy-MM-dd HH:mm:ss'),
     `${log.userDisplayName} (${log.userRole})`,
     log.action,
     log.module,
