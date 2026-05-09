@@ -782,9 +782,6 @@ function LoginPage({ onSwitch, logActivity }: { onSwitch: () => void, logActivit
         </Button>
 
         <div className="pt-4 text-center">
-          <p className="text-xs text-indigo-800 font-bold bg-indigo-50 p-3 rounded-xl mb-4">
-            Note: Demo accounts are not migration-synced. Please Sign Up to create your first session account.
-          </p>
           <p className="text-xs text-gray-500 font-medium">
             Don't have an account?{' '}
             <button type="button" onClick={onSwitch} className="text-indigo-600 font-bold hover:underline">
